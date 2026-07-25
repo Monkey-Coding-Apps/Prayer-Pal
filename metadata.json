@@ -1,0 +1,6 @@
+{
+  "name": "Prayer Pal",
+  "description": "A Catholic Prayer and Guided Rosary application featuring customizable decade counts, standalone prayer recitation, dynamic text-to-speech voice controls, and interactive visual bead progress indicators.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
