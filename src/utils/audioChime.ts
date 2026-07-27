@@ -30,17 +30,12 @@ export function unlockAudioEngine(): void {
     ctx.resume().catch(() => {});
   }
 
-  // 2. Unlock Web Speech API on iOS Safari / Chrome Mobile
+  // 2. Resume Web Speech API if paused on mobile
   if ('speechSynthesis' in window) {
     try {
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
       }
-      // Speak a 1-character silent/soft utterance to register user gesture
-      const silentUtterance = new SpeechSynthesisUtterance(' ');
-      silentUtterance.volume = 0.01;
-      silentUtterance.rate = 2.0;
-      window.speechSynthesis.speak(silentUtterance);
     } catch {
       // Ignore initial unlock errors
     }

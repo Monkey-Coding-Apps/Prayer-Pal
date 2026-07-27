@@ -32,6 +32,7 @@ interface AudioToolbarProps {
   speechRate: number;
   onChangeSpeechRate: (rate: number) => void;
   onTestVoice?: (voiceURI?: string) => void;
+  onReloadVoices?: () => void;
 }
 
 export const AudioToolbar: React.FC<AudioToolbarProps> = ({
@@ -50,6 +51,7 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
   speechRate,
   onChangeSpeechRate,
   onTestVoice,
+  onReloadVoices,
 }) => {
   const [showVoiceSettings, setShowVoiceSettings] = useState(false);
 
@@ -66,6 +68,15 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
   const handlePlayChime = () => {
     unlockAudioEngine();
     playSacredChime(432, 2.5);
+  };
+
+  const toggleVoiceSettings = () => {
+    const nextState = !showVoiceSettings;
+    setShowVoiceSettings(nextState);
+    if (nextState) {
+      unlockAudioEngine();
+      if (onReloadVoices) onReloadVoices();
+    }
   };
 
   return (
@@ -172,7 +183,7 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
           {/* Voice Options Toggle */}
           <button
             type="button"
-            onClick={() => setShowVoiceSettings(!showVoiceSettings)}
+            onClick={toggleVoiceSettings}
             className={`flex items-center gap-1.5 px-3.5 py-2 rounded-full border text-xs font-semibold transition-all ${
               showVoiceSettings
                 ? 'bg-[#8c7b5b]/15 dark:bg-[#8c7b5b]/30 border-[#8c7b5b] text-[#8c7b5b] dark:text-[#d0c0a0]'
@@ -196,19 +207,36 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
                 <span>Voice Selector</span>
               </label>
 
-              {onTestVoice && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    unlockAudioEngine();
-                    onTestVoice(selectedVoiceURI || undefined);
-                  }}
-                  className="text-[11px] font-semibold text-[#5a5a40] dark:text-[#c5c5a5] hover:underline flex items-center gap-1"
-                >
-                  <Volume1 className="w-3.5 h-3.5 text-[#8c7b5b]" />
-                  <span>Test Voice</span>
-                </button>
-              )}
+              <div className="flex items-center gap-3">
+                {onReloadVoices && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      unlockAudioEngine();
+                      onReloadVoices();
+                    }}
+                    className="text-[11px] font-semibold text-[#8c7b5b] dark:text-[#a09070] hover:underline flex items-center gap-1"
+                    title="Refresh System Voice Engine List"
+                  >
+                    <RotateCcw className="w-3 h-3 text-[#8c7b5b]" />
+                    <span>Reload Voices</span>
+                  </button>
+                )}
+
+                {onTestVoice && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      unlockAudioEngine();
+                      onTestVoice(selectedVoiceURI || undefined);
+                    }}
+                    className="text-[11px] font-semibold text-[#5a5a40] dark:text-[#c5c5a5] hover:underline flex items-center gap-1"
+                  >
+                    <Volume1 className="w-3.5 h-3.5 text-[#8c7b5b]" />
+                    <span>Test Voice</span>
+                  </button>
+                )}
+              </div>
             </div>
 
             <select

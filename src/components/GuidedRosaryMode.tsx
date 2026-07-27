@@ -48,6 +48,7 @@ export const GuidedRosaryMode: React.FC<GuidedRosaryModeProps> = ({
     voices,
     isSpeaking,
     isPaused,
+    loadVoices,
     speak,
     pause,
     resume,
@@ -399,6 +400,7 @@ export const GuidedRosaryMode: React.FC<GuidedRosaryModeProps> = ({
           onUpdateConfig((prev) => ({ ...prev, speechRate: rate }))
         }
         onTestVoice={testVoice}
+        onReloadVoices={loadVoices}
       />
     </div>
   );

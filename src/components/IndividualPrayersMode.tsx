@@ -46,6 +46,7 @@ export const IndividualPrayersMode: React.FC<IndividualPrayersModeProps> = ({
     voices,
     isSpeaking,
     isPaused,
+    loadVoices,
     speak,
     pause,
     resume,
@@ -244,6 +245,7 @@ export const IndividualPrayersMode: React.FC<IndividualPrayersModeProps> = ({
               onUpdateConfig((prev) => ({ ...prev, speechRate: rate }))
             }
             onTestVoice={testVoice}
+            onReloadVoices={loadVoices}
           />
         </div>
       </div>

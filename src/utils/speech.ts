@@ -18,6 +18,14 @@ export interface UseSpeechProps {
   onSpeechEnd?: () => void;
 }
 
+const DEFAULT_FALLBACK_VOICE: VoiceOption = {
+  voiceURI: 'default-system-voice',
+  name: 'Default System Voice (Device Engine)',
+  lang: 'en-US',
+  isLocalService: true,
+  default: true,
+};
+
 export function useSpeech({
   textToSpeak,
   speechRate,
@@ -26,7 +34,7 @@ export function useSpeech({
   autoAdvance,
   onSpeechEnd,
 }: UseSpeechProps) {
-  const [voices, setVoices] = useState<VoiceOption[]>([]);
+  const [voices, setVoices] = useState<VoiceOption[]>([DEFAULT_FALLBACK_VOICE]);
   const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -71,33 +79,27 @@ export function useSpeech({
 
   // Load and map available system voices
   const loadVoices = useCallback(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setVoices([DEFAULT_FALLBACK_VOICE]);
+      return;
+    }
 
-    let availableVoices = window.speechSynthesis.getVoices();
+    let availableVoices: SpeechSynthesisVoice[] = [];
+    try {
+      availableVoices = window.speechSynthesis.getVoices() || [];
+    } catch {
+      availableVoices = [];
+    }
+
     if (!availableVoices || availableVoices.length === 0) {
-      // Retry after a short tick for browsers that load voices asynchronously
-      setTimeout(() => {
-        if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-          availableVoices = window.speechSynthesis.getVoices();
-          if (availableVoices && availableVoices.length > 0) {
-            const mapped: VoiceOption[] = availableVoices.map((v) => ({
-              voiceURI: v.voiceURI || v.name,
-              name: v.name,
-              lang: v.lang,
-              isLocalService: v.localService,
-              default: v.default,
-            }));
-            setVoices(mapped);
-          }
-        }
-      }, 200);
+      setVoices([DEFAULT_FALLBACK_VOICE]);
       return;
     }
 
     const mapped: VoiceOption[] = availableVoices.map((v) => ({
       voiceURI: v.voiceURI || v.name,
       name: v.name,
-      lang: v.lang,
+      lang: v.lang || 'en-US',
       isLocalService: v.localService,
       default: v.default,
     }));
@@ -125,12 +127,32 @@ export function useSpeech({
     setSelectedVoice(matched || null);
   }, [voiceURI]);
 
+  // Persistent voice loader polling for Android WebView / APK compatibility
   useEffect(() => {
     loadVoices();
+
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
+
+    // Poll every 400ms for up to 10 seconds to catch delayed Android TTS initialization
+    let attempts = 0;
+    const interval = setInterval(() => {
+      attempts += 1;
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        const currentVoices = window.speechSynthesis.getVoices();
+        if (currentVoices && currentVoices.length > 0) {
+          loadVoices();
+          clearInterval(interval);
+        }
+      }
+      if (attempts >= 25) {
+        clearInterval(interval);
+      }
+    }, 400);
+
     return () => {
+      clearInterval(interval);
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.onvoiceschanged = null;
       }
@@ -163,89 +185,106 @@ export function useSpeech({
       unlockAudioEngine();
       setHasAudioUnlocked(true);
 
-      // Reset speech synthesis state
-      try {
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
-        }
-        window.speechSynthesis.cancel();
-      } catch {
-        // ignore
-      }
-
       const text = customText || textToSpeak;
       if (!text || text.trim().length === 0) return;
 
-      const utterance = new SpeechSynthesisUtterance(text);
-      utterance.rate = Math.max(0.5, Math.min(1.5, speechRateRef.current));
-
-      // Determine voice
-      let voiceToUse = selectedVoice;
-      if (customVoiceURI) {
-        const availableVoices = window.speechSynthesis.getVoices();
-        const found = availableVoices.find(
-          (v) => (v.voiceURI && v.voiceURI === customVoiceURI) || v.name === customVoiceURI
-        );
-        if (found) voiceToUse = found;
-      }
-
-      if (!voiceToUse) {
-        const available = window.speechSynthesis.getVoices();
-        if (available && available.length > 0) {
-          voiceToUse =
-            available.find((v) => v.lang.startsWith('en') && v.name.includes('Natural')) ||
-            available.find((v) => v.lang.startsWith('en') && v.name.includes('Google')) ||
-            available.find((v) => v.lang.startsWith('en') && v.default) ||
-            available.find((v) => v.lang.startsWith('en')) ||
-            available[0];
-        }
-      }
-
-      if (voiceToUse) {
-        utterance.voice = voiceToUse;
-        utterance.lang = voiceToUse.lang || 'en-US';
-      } else {
-        utterance.lang = 'en-US';
-      }
-
-      // Crucial iOS Safari WebKit Fix: Attach utterance to global window object
-      // so garbage collection does not cut off speech prematurely on mobile!
-      (window as unknown as { __activeUtterance?: SpeechSynthesisUtterance }).__activeUtterance = utterance;
-
-      utterance.onstart = () => {
-        setIsSpeaking(true);
-        setIsPaused(false);
-      };
-
-      utterance.onend = () => {
-        setIsSpeaking(false);
-        setIsPaused(false);
-        delete (window as unknown as { __activeUtterance?: unknown }).__activeUtterance;
-        if (autoAdvanceRef.current && onSpeechEndRef.current) {
-          onSpeechEndRef.current();
-        }
-      };
-
-      utterance.onerror = (e) => {
-        console.warn('Speech synthesis error:', e);
-        setIsSpeaking(false);
-        setIsPaused(false);
-        delete (window as unknown as { __activeUtterance?: unknown }).__activeUtterance;
-      };
-
-      utteranceRef.current = utterance;
-
-      // Ensure speech synthesis is resumed before speak
+      // Attempt voice refresh if list is currently default
+      let currentAvailable: SpeechSynthesisVoice[] = [];
       try {
-        if (window.speechSynthesis.paused) {
-          window.speechSynthesis.resume();
+        currentAvailable = window.speechSynthesis.getVoices() || [];
+      } catch {
+        currentAvailable = [];
+      }
+
+      // Determine voice to use
+      let voiceToUse = selectedVoice;
+      const targetURI = customVoiceURI || voiceURI;
+
+      if (currentAvailable.length > 0) {
+        if (targetURI) {
+          voiceToUse =
+            currentAvailable.find(
+              (v) => (v.voiceURI && v.voiceURI === targetURI) || v.name === targetURI
+            ) || null;
         }
-        window.speechSynthesis.speak(utterance);
-      } catch (err) {
-        console.warn('Failed to call speak:', err);
+
+        if (!voiceToUse) {
+          voiceToUse =
+            currentAvailable.find((v) => v.lang.startsWith('en') && v.name.includes('Natural')) ||
+            currentAvailable.find((v) => v.lang.startsWith('en') && v.name.includes('Google')) ||
+            currentAvailable.find((v) => v.lang.startsWith('en') && v.default) ||
+            currentAvailable.find((v) => v.lang.startsWith('en')) ||
+            currentAvailable[0] ||
+            null;
+        }
+      }
+
+      // Prepare speech execution function
+      const executeSpeak = () => {
+        try {
+          if (window.speechSynthesis.paused) {
+            window.speechSynthesis.resume();
+          }
+
+          const utterance = new SpeechSynthesisUtterance(text);
+          utterance.rate = Math.max(0.5, Math.min(1.5, speechRateRef.current));
+          utterance.pitch = 1.0;
+          utterance.volume = 1.0;
+
+          if (voiceToUse) {
+            utterance.voice = voiceToUse;
+            utterance.lang = voiceToUse.lang || 'en-US';
+          } else {
+            utterance.lang = 'en-US';
+          }
+
+          // Crucial Android WebView / WebKit GC Fix: Keep reference on global window
+          (window as unknown as { __activeUtterance?: SpeechSynthesisUtterance }).__activeUtterance = utterance;
+
+          utterance.onstart = () => {
+            setIsSpeaking(true);
+            setIsPaused(false);
+          };
+
+          utterance.onend = () => {
+            setIsSpeaking(false);
+            setIsPaused(false);
+            delete (window as unknown as { __activeUtterance?: unknown }).__activeUtterance;
+            if (autoAdvanceRef.current && onSpeechEndRef.current) {
+              onSpeechEndRef.current();
+            }
+          };
+
+          utterance.onerror = (e) => {
+            console.warn('Speech synthesis error:', e);
+            setIsSpeaking(false);
+            setIsPaused(false);
+            delete (window as unknown as { __activeUtterance?: unknown }).__activeUtterance;
+          };
+
+          utteranceRef.current = utterance;
+          window.speechSynthesis.speak(utterance);
+        } catch (err) {
+          console.warn('Failed to execute speak:', err);
+          setIsSpeaking(false);
+          setIsPaused(false);
+        }
+      };
+
+      // Safely cancel active or pending synthesis before speaking
+      // microtick delay ensures Android Chromium IPC cancel doesn't discard the new utterance!
+      if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
+        setTimeout(executeSpeak, 40);
+      } else {
+        executeSpeak();
       }
     },
-    [textToSpeak, selectedVoice]
+    [textToSpeak, selectedVoice, voiceURI]
   );
 
   const pause = useCallback(() => {
@@ -297,6 +336,7 @@ export function useSpeech({
     isSpeaking,
     isPaused,
     hasAudioUnlocked,
+    loadVoices,
     speak,
     pause,
     resume,
