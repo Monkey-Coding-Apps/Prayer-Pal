@@ -2,6 +2,16 @@
 // Ensures rich, soothing acoustic sound across all mobile & desktop browsers.
 
 let audioCtx: AudioContext | null = null;
+let globalAudioElement: HTMLAudioElement | null = null;
+
+export function getGlobalAudioElement(): HTMLAudioElement | null {
+  if (typeof window === 'undefined') return null;
+  if (!globalAudioElement) {
+    globalAudioElement = new Audio();
+    globalAudioElement.preload = 'auto';
+  }
+  return globalAudioElement;
+}
 
 export function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
@@ -18,7 +28,7 @@ export function getAudioContext(): AudioContext | null {
 }
 
 /**
- * Unlock audio context and Web Speech API on iOS/Android mobile browsers.
+ * Unlock audio context, HTML5 Audio element, and Web Speech API on iOS/Android mobile browsers.
  * Must be called during or after a user click/touch event.
  */
 export function unlockAudioEngine(): void {
@@ -30,7 +40,16 @@ export function unlockAudioEngine(): void {
     ctx.resume().catch(() => {});
   }
 
-  // 2. Resume Web Speech API & wake Android TextToSpeech service in APK/WebView
+  // 2. Unlock HTML5 Audio Element for media playback
+  const audio = getGlobalAudioElement();
+  if (audio) {
+    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    audio.play().then(() => {
+      audio.pause();
+    }).catch(() => {});
+  }
+
+  // 3. Resume Web Speech API & wake Android TextToSpeech service in APK/WebView
   if ('speechSynthesis' in window) {
     try {
       if (window.speechSynthesis.paused) {
