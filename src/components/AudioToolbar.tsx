@@ -240,18 +240,40 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
             </div>
 
             <select
-              value={selectedVoiceURI || ''}
+              value={selectedVoiceURI || 'cloud-en-us'}
               onChange={(e) => handleVoiceChange(e.target.value)}
               className="w-full bg-white dark:bg-[#282822] border border-[#d1d1c1] dark:border-[#38382f] text-[#2c2c24] dark:text-[#e8e8e0] rounded-xl px-3 py-2 text-xs focus:ring-2 focus:ring-[#5a5a40] focus:outline-none"
             >
-              {voices.length === 0 ? (
-                <option value="">Default System Voice</option>
-              ) : (
-                voices.map((v) => (
-                  <option key={v.voiceURI} value={v.voiceURI}>
-                    {v.name} ({v.lang}) {v.default ? '• Default' : ''}
-                  </option>
-                ))
+              <optgroup label="✨ Universal Cloud Voices (All Devices)">
+                {voices
+                  .filter((v) => v.provider === 'cloud')
+                  .map((v) => (
+                    <option key={v.voiceURI} value={v.voiceURI}>
+                      {v.name} {v.default ? '• Default' : ''}
+                    </option>
+                  ))}
+              </optgroup>
+
+              <optgroup label="🔔 Tone & Bell Mode">
+                {voices
+                  .filter((v) => v.provider === 'synth')
+                  .map((v) => (
+                    <option key={v.voiceURI} value={v.voiceURI}>
+                      {v.name}
+                    </option>
+                  ))}
+              </optgroup>
+
+              {voices.some((v) => v.provider === 'system') && (
+                <optgroup label="📱 Device Local System Voices">
+                  {voices
+                    .filter((v) => v.provider === 'system')
+                    .map((v) => (
+                      <option key={v.voiceURI} value={v.voiceURI}>
+                        {v.name} ({v.lang})
+                      </option>
+                    ))}
+                </optgroup>
               )}
             </select>
           </div>

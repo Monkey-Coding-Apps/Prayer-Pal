@@ -19,11 +19,11 @@ export interface UseSpeechProps {
   onSpeechEnd?: () => void;
 }
 
-// Universal Cloud & Tone Voices (Supported everywhere: Web, Mobile, APK, WebView)
+// Universal Cloud & Tone Voices (Universal support across Web, Mobile, iFrames, and APKs)
 export const UNIVERSAL_VOICES: VoiceOption[] = [
   {
     voiceURI: 'cloud-en-us',
-    name: 'English (US - Gentle & Clear)',
+    name: 'English (US - Clear & Gentle)',
     lang: 'en',
     isLocalService: false,
     default: true,
@@ -31,7 +31,7 @@ export const UNIVERSAL_VOICES: VoiceOption[] = [
   },
   {
     voiceURI: 'cloud-en-gb',
-    name: 'English (UK - Reverent & British)',
+    name: 'English (UK - Reverent British)',
     lang: 'en-gb',
     isLocalService: false,
     default: false,
@@ -120,8 +120,9 @@ export function useSpeech({
   const [isPaused, setIsPaused] = useState(false);
   const [hasAudioUnlocked, setHasAudioUnlocked] = useState(false);
 
-  // HTML5 Audio element for Cloud MP3 speech
+  // Persistent HTMLAudioElement for cloud TTS audio
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const currentBlobUrlRef = useRef<string | null>(null);
   const watchdogTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const activeModeRef = useRef<'cloud' | 'system' | 'synth'>('cloud');
@@ -163,6 +164,17 @@ export function useSpeech({
     }
   }, []);
 
+  const revokeBlob = useCallback(() => {
+    if (currentBlobUrlRef.current) {
+      try {
+        URL.revokeObjectURL(currentBlobUrlRef.current);
+      } catch {
+        // ignore
+      }
+      currentBlobUrlRef.current = null;
+    }
+  }, []);
+
   // Stop function that halts all audio and resets state cleanly
   const stop = useCallback(() => {
     clearWatchdog();
@@ -177,6 +189,7 @@ export function useSpeech({
         // ignore
       }
     }
+    revokeBlob();
 
     // 2. Stop System SpeechSynthesis
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -189,7 +202,7 @@ export function useSpeech({
 
     setIsSpeaking(false);
     setIsPaused(false);
-  }, [clearWatchdog]);
+  }, [clearWatchdog, revokeBlob]);
 
   // Mute effect
   useEffect(() => {
@@ -198,7 +211,7 @@ export function useSpeech({
     }
   }, [isMuted, stop]);
 
-  // Load device system voices and combine with Universal Cloud Voices
+  // Load device system voices and merge with Universal Cloud Voices
   const loadVoices = useCallback(() => {
     let availableVoices: SpeechSynthesisVoice[] = [];
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
@@ -211,7 +224,7 @@ export function useSpeech({
 
     const systemMapped: VoiceOption[] = availableVoices.map((v) => ({
       voiceURI: v.voiceURI || v.name,
-      name: `Device Voice: ${v.name || 'System Voice'}`,
+      name: `Device System: ${v.name || 'Voice'}`,
       lang: v.lang || 'en-US',
       isLocalService: v.localService,
       default: v.default,
@@ -236,53 +249,69 @@ export function useSpeech({
     }
   }, [loadVoices]);
 
-  // Cloud Speech Player helper via /api/tts
-  const playCloudSpeech = useCallback((text: string, lang: string) => {
-    activeModeRef.current = 'cloud';
+  // Cloud Speech Player helper via server /api/tts endpoint
+  const playCloudSpeech = useCallback(
+    async (text: string, lang: string) => {
+      activeModeRef.current = 'cloud';
+      stop();
 
-    if (!audioRef.current) {
-      audioRef.current = new Audio();
-    }
+      try {
+        const ttsUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+        const response = await fetch(ttsUrl);
 
-    const audio = audioRef.current;
-    const ttsUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+        if (!response.ok) {
+          throw new Error(`TTS server error HTTP ${response.status}`);
+        }
 
-    audio.src = ttsUrl;
-    audio.playbackRate = Math.max(0.75, Math.min(1.25, speechRateRef.current));
+        const blob = await response.blob();
+        if (!blob || blob.size === 0) {
+          throw new Error('Received empty audio blob');
+        }
 
-    audio.onplay = () => {
-      setIsSpeaking(true);
-      setIsPaused(false);
-    };
+        const blobUrl = URL.createObjectURL(blob);
+        currentBlobUrlRef.current = blobUrl;
 
-    audio.onended = () => {
-      setIsSpeaking(false);
-      setIsPaused(false);
-      if (autoAdvanceRef.current && onSpeechEndRef.current) {
-        onSpeechEndRef.current();
-      }
-    };
+        if (!audioRef.current) {
+          audioRef.current = new Audio();
+        }
 
-    audio.onerror = (err) => {
-      console.warn('Cloud audio playback error:', err);
-      setIsSpeaking(false);
-      setIsPaused(false);
-    };
+        const audio = audioRef.current;
+        audio.src = blobUrl;
+        audio.playbackRate = Math.max(0.75, Math.min(1.25, speechRateRef.current));
 
-    audio
-      .play()
-      .then(() => {
+        audio.onplay = () => {
+          setIsSpeaking(true);
+          setIsPaused(false);
+        };
+
+        audio.onended = () => {
+          setIsSpeaking(false);
+          setIsPaused(false);
+          revokeBlob();
+          if (autoAdvanceRef.current && onSpeechEndRef.current) {
+            onSpeechEndRef.current();
+          }
+        };
+
+        audio.onerror = (err) => {
+          console.warn('Cloud audio element playback error:', err);
+          setIsSpeaking(false);
+          setIsPaused(false);
+          revokeBlob();
+        };
+
+        await audio.play();
         setIsSpeaking(true);
         setIsPaused(false);
-      })
-      .catch((err) => {
-        console.warn('Audio play blocked by browser/mobile policy:', err);
-        // Fallback chime bell
-        playSacredChime(432, 1.5);
+      } catch (err) {
+        console.warn('Cloud TTS playback error:', err);
         setIsSpeaking(false);
         setIsPaused(false);
-      });
-  }, []);
+        revokeBlob();
+      }
+    },
+    [stop, revokeBlob]
+  );
 
   // Main Speak Handler
   const speak = useCallback(
@@ -300,7 +329,7 @@ export function useSpeech({
       // Halt any previous playback
       stop();
 
-      // 1. Sacred Chime Mode
+      // 1. Sacred Chime & Bell Only Mode
       if (targetURI === 'chime-bell') {
         activeModeRef.current = 'synth';
         setIsSpeaking(true);
@@ -316,14 +345,14 @@ export function useSpeech({
         return;
       }
 
-      // 2. Cloud Server Voices
+      // 2. Universal Cloud Voices
       if (targetURI.startsWith('cloud-') || targetURI === 'default-system-voice') {
         const lang = CLOUD_LANG_MAP[targetURI] || 'en';
-        playCloudSpeech(text, lang);
+        await playCloudSpeech(text, lang);
         return;
       }
 
-      // 3. Device System SpeechSynthesis Engine (with Watchdog safety)
+      // 3. Device System Voices (with Watchdog safety fallback)
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         activeModeRef.current = 'system';
         try {
@@ -333,8 +362,8 @@ export function useSpeech({
           );
 
           if (!targetVoice) {
-            // If device voice not found, fallback to Cloud TTS
-            playCloudSpeech(text, 'en');
+            // Device voice unavailable -> fallback to Cloud Speech
+            await playCloudSpeech(text, 'en');
             return;
           }
 
@@ -347,17 +376,18 @@ export function useSpeech({
           utterance.voice = targetVoice;
           utterance.lang = targetVoice.lang || 'en-US';
 
-          // Watchdog timer: If onstart does NOT fire within 2 seconds, speech synth is frozen
+          // Watchdog timer: If device SpeechSynthesis does NOT start speaking within 1200ms,
+          // assume SpeechSynthesis is frozen/silent in iframe sandbox and fallback to Cloud TTS.
           clearWatchdog();
           watchdogTimerRef.current = setTimeout(() => {
-            console.warn('Device SpeechSynthesis timed out starting. Falling back to Cloud TTS.');
+            console.warn('Device SpeechSynthesis start timed out. Falling back to Cloud TTS.');
             try {
               window.speechSynthesis.cancel();
             } catch {
               // ignore
             }
             playCloudSpeech(text, 'en');
-          }, 2000);
+          }, 1200);
 
           utterance.onstart = () => {
             clearWatchdog();
@@ -376,23 +406,21 @@ export function useSpeech({
 
           utterance.onerror = (e) => {
             clearWatchdog();
-            console.warn('SpeechSynthesis error:', e);
+            console.warn('Device SpeechSynthesis error:', e);
             playCloudSpeech(text, 'en');
           };
 
           window.speechSynthesis.speak(utterance);
-          setIsSpeaking(true);
-          setIsPaused(false);
           return;
         } catch (e) {
           console.warn('System SpeechSynthesis execution failed:', e);
-          playCloudSpeech(text, 'en');
+          await playCloudSpeech(text, 'en');
           return;
         }
       }
 
       // Default fallback
-      playCloudSpeech(text, 'en');
+      await playCloudSpeech(text, 'en');
     },
     [textToSpeak, voiceURI, stop, clearWatchdog, playCloudSpeech]
   );
@@ -442,7 +470,11 @@ export function useSpeech({
       return;
     }
 
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window && window.speechSynthesis.paused) {
+    if (
+      typeof window !== 'undefined' &&
+      'speechSynthesis' in window &&
+      window.speechSynthesis.paused
+    ) {
       try {
         window.speechSynthesis.resume();
         setIsPaused(false);

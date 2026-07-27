@@ -68,18 +68,20 @@ export const GuidedRosaryMode: React.FC<GuidedRosaryModeProps> = ({
     },
   });
 
-  // Automatically trigger speech & soft chime when step changes if playing rosary & unmuted
+  // Automatically trigger speech when step changes if playing rosary & unmuted
   useEffect(() => {
     if (isPlayingRosary && currentStep && !config.isAudioMuted) {
-      playSacredChime(432, 1.2);
+      if (config.voiceURI !== 'chime-bell') {
+        playSacredChime(432, 0.8);
+      }
       const timer = setTimeout(() => {
         speak(currentStep.text);
-      }, 250);
+      }, 200);
       return () => clearTimeout(timer);
     } else if (!isPlayingRosary) {
       stop();
     }
-  }, [currentStepIndex, isPlayingRosary, config.isAudioMuted, speak, stop, currentStep]);
+  }, [currentStepIndex, isPlayingRosary, config.isAudioMuted, config.voiceURI, speak, stop, currentStep]);
 
   // Step Navigation handlers
   const handleNextStep = () => {
