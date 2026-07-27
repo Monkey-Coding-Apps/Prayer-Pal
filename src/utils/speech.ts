@@ -18,76 +18,45 @@ export interface UseSpeechProps {
   onSpeechEnd?: () => void;
 }
 
-export const CLOUD_VOICES: VoiceOption[] = [
+const DEFAULT_SYSTEM_VOICE: VoiceOption = {
+  voiceURI: 'default-system-voice',
+  name: 'Default System Voice (Device Engine)',
+  lang: 'en-US',
+  isLocalService: true,
+  default: true,
+};
+
+const PRESET_VOICES: VoiceOption[] = [
+  DEFAULT_SYSTEM_VOICE,
   {
-    voiceURI: 'cloud-en-us',
-    name: 'Google Voice (US English)',
-    lang: 'en',
-    isLocalService: false,
-    default: true,
+    voiceURI: 'preset-en-us',
+    name: 'English (United States)',
+    lang: 'en-US',
+    isLocalService: true,
+    default: false,
   },
   {
-    voiceURI: 'cloud-en-gb',
-    name: 'Google Voice (UK English)',
+    voiceURI: 'preset-en-gb',
+    name: 'English (United Kingdom)',
     lang: 'en-GB',
-    isLocalService: false,
+    isLocalService: true,
     default: false,
   },
   {
-    voiceURI: 'cloud-en-au',
-    name: 'Google Voice (Australian)',
-    lang: 'en-AU',
-    isLocalService: false,
-    default: false,
-  },
-  {
-    voiceURI: 'cloud-la',
-    name: 'Google Voice (Latin - Ecclesiastical)',
+    voiceURI: 'preset-la',
+    name: 'Latin (Ecclesiastical)',
     lang: 'la',
-    isLocalService: false,
+    isLocalService: true,
     default: false,
   },
   {
-    voiceURI: 'cloud-es',
-    name: 'Google Voice (Spanish)',
-    lang: 'es',
-    isLocalService: false,
+    voiceURI: 'preset-es-es',
+    name: 'Spanish (Español)',
+    lang: 'es-ES',
+    isLocalService: true,
     default: false,
   },
 ];
-
-function splitTextIntoChunks(text: string, maxLen = 130): string[] {
-  if (!text) return [];
-  // Split by sentence punctuation or line breaks
-  const rawSentences = text.match(/[^.!?;\n]+[.!?;\n]*/g) || [text];
-  const chunks: string[] = [];
-
-  for (const sentence of rawSentences) {
-    const trimmed = sentence.trim();
-    if (!trimmed) continue;
-
-    if (trimmed.length <= maxLen) {
-      chunks.push(trimmed);
-    } else {
-      // Split longer sentences by commas or colons
-      const parts = trimmed.split(/([,:]\s*)/);
-      let current = '';
-      for (const part of parts) {
-        if ((current + part).length <= maxLen) {
-          current += part;
-        } else {
-          if (current.trim()) chunks.push(current.trim());
-          current = part;
-        }
-      }
-      if (current.trim()) {
-        chunks.push(current.trim());
-      }
-    }
-  }
-
-  return chunks.length > 0 ? chunks : [text];
-}
 
 export function useSpeech({
   textToSpeak,
@@ -97,19 +66,13 @@ export function useSpeech({
   autoAdvance,
   onSpeechEnd,
 }: UseSpeechProps) {
-  const [voices, setVoices] = useState<VoiceOption[]>(CLOUD_VOICES);
+  const [voices, setVoices] = useState<VoiceOption[]>(PRESET_VOICES);
   const [selectedVoice, setSelectedVoice] = useState<SpeechSynthesisVoice | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [hasAudioUnlocked, setHasAudioUnlocked] = useState(false);
 
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
-  const activeAudioRef = useRef<HTMLAudioElement | null>(null);
-  const isPlayingCloudRef = useRef<boolean>(false);
-  const cloudQueueRef = useRef<string[]>([]);
-  const cloudIndexRef = useRef<number>(0);
-  const cloudLangRef = useRef<string>('en');
-
   const onSpeechEndRef = useRef(onSpeechEnd);
   const autoAdvanceRef = useRef(autoAdvance);
   const speechRateRef = useRef(speechRate);
@@ -131,84 +94,63 @@ export function useSpeech({
     isMutedRef.current = isMuted;
   }, [isMuted]);
 
-  // Stop cloud audio helper
-  const stopCloudAudio = useCallback(() => {
-    isPlayingCloudRef.current = false;
-    if (activeAudioRef.current) {
-      try {
-        activeAudioRef.current.pause();
-        activeAudioRef.current.currentTime = 0;
-      } catch {
-        // ignore
-      }
-      activeAudioRef.current = null;
-    }
-    cloudQueueRef.current = [];
-    cloudIndexRef.current = 0;
-  }, []);
-
-  // Stop system speech helper
-  const stopSystemSpeech = useCallback(() => {
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        window.speechSynthesis.cancel();
-      } catch {
-        // ignore
-      }
-    }
-    if (typeof window !== 'undefined') {
-      delete (window as unknown as { __activeUtterance?: unknown }).__activeUtterance;
-    }
-  }, []);
-
-  // Overall stop speech
-  const stop = useCallback(() => {
-    stopCloudAudio();
-    stopSystemSpeech();
-    setIsSpeaking(false);
-    setIsPaused(false);
-  }, [stopCloudAudio, stopSystemSpeech]);
-
   // Immediately stop speech whenever isMuted becomes true
   useEffect(() => {
     if (isMuted) {
-      stop();
-    }
-  }, [isMuted, stop]);
-
-  // Load and map available system voices + merge with Cloud Voices
-  const loadVoices = useCallback(() => {
-    let availableVoices: SpeechSynthesisVoice[] = [];
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      try {
-        availableVoices = window.speechSynthesis.getVoices() || [];
-      } catch {
-        availableVoices = [];
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        try {
+          window.speechSynthesis.cancel();
+        } catch {
+          // ignore
+        }
       }
+      setIsSpeaking(false);
+      setIsPaused(false);
+    }
+  }, [isMuted]);
+
+  // Load and map available system voices
+  const loadVoices = useCallback(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setVoices(PRESET_VOICES);
+      return;
+    }
+
+    let availableVoices: SpeechSynthesisVoice[] = [];
+    try {
+      availableVoices = window.speechSynthesis.getVoices() || [];
+    } catch {
+      availableVoices = [];
+    }
+
+    if (!availableVoices || availableVoices.length === 0) {
+      setVoices(PRESET_VOICES);
+      return;
     }
 
     const systemMapped: VoiceOption[] = availableVoices.map((v) => ({
       voiceURI: v.voiceURI || v.name,
-      name: v.name || 'Device System Voice',
+      name: v.name || 'System Voice',
       lang: v.lang || 'en-US',
       isLocalService: v.localService,
       default: v.default,
     }));
 
-    // Merge Cloud Voices with System Voices
-    const combined: VoiceOption[] = [...CLOUD_VOICES, ...systemMapped];
+    const combined: VoiceOption[] = [DEFAULT_SYSTEM_VOICE, ...systemMapped];
     setVoices(combined);
 
-    // Match selected voice
-    if (voiceURI) {
-      const matchedSystem = availableVoices.find(
+    // Match selected voice if specific URI
+    if (voiceURI && voiceURI !== 'default-system-voice' && !voiceURI.startsWith('preset-')) {
+      const matched = availableVoices.find(
         (v) => (v.voiceURI && v.voiceURI === voiceURI) || v.name === voiceURI
       );
-      setSelectedVoice(matchedSystem || null);
+      setSelectedVoice(matched || null);
+    } else {
+      setSelectedVoice(null);
     }
   }, [voiceURI]);
 
-  // Persistent voice loader polling
+  // Persistent voice loader polling for Android WebView / APK initialization
   useEffect(() => {
     loadVoices();
 
@@ -216,14 +158,21 @@ export function useSpeech({
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
 
+    // Poll every 500ms for up to 10 seconds to detect Android TTS initialization
+    let attempts = 0;
     const interval = setInterval(() => {
+      attempts += 1;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         const currentVoices = window.speechSynthesis.getVoices();
         if (currentVoices && currentVoices.length > 0) {
           loadVoices();
+          clearInterval(interval);
         }
       }
-    }, 1000);
+      if (attempts >= 20) {
+        clearInterval(interval);
+      }
+    }, 500);
 
     return () => {
       clearInterval(interval);
@@ -233,141 +182,81 @@ export function useSpeech({
     };
   }, [loadVoices]);
 
-  // Play Cloud Audio Chunks function
-  const playCloudAudio = useCallback(
-    (textToPlay: string, langToUse: string) => {
-      stopCloudAudio();
-      stopSystemSpeech();
-
-      if (isMutedRef.current || !textToPlay || textToPlay.trim().length === 0) return;
-
-      const chunks = splitTextIntoChunks(textToPlay);
-      if (!chunks || chunks.length === 0) return;
-
-      cloudQueueRef.current = chunks;
-      cloudIndexRef.current = 0;
-      cloudLangRef.current = langToUse || 'en';
-      isPlayingCloudRef.current = true;
-
-      setIsSpeaking(true);
-      setIsPaused(false);
-
-      const playNextChunk = () => {
-        if (!isPlayingCloudRef.current) return;
-
-        if (cloudIndexRef.current >= cloudQueueRef.current.length) {
-          isPlayingCloudRef.current = false;
-          setIsSpeaking(false);
-          setIsPaused(false);
-          activeAudioRef.current = null;
-          if (autoAdvanceRef.current && onSpeechEndRef.current) {
-            onSpeechEndRef.current();
-          }
-          return;
-        }
-
-        const chunk = cloudQueueRef.current[cloudIndexRef.current];
-        const encoded = encodeURIComponent(chunk);
-        const audioUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encoded}&tl=${encodeURIComponent(cloudLangRef.current)}&client=tw-ob`;
-
-        const audio = new Audio(audioUrl);
-        audio.playbackRate = Math.max(0.75, Math.min(1.25, speechRateRef.current));
-        activeAudioRef.current = audio;
-
-        audio.onended = () => {
-          cloudIndexRef.current++;
-          playNextChunk();
-        };
-
-        audio.onerror = (e) => {
-          console.warn('Cloud audio playback error, moving to next chunk:', e);
-          cloudIndexRef.current++;
-          playNextChunk();
-        };
-
-        audio.play().catch((err) => {
-          console.warn('Failed to start cloud audio chunk:', err);
-          cloudIndexRef.current++;
-          playNextChunk();
-        });
-      };
-
-      playNextChunk();
-    },
-    [stopCloudAudio, stopSystemSpeech]
-  );
+  // Stop speech synthesis
+  const stop = useCallback(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    }
+    setIsSpeaking(false);
+    setIsPaused(false);
+    if (typeof window !== 'undefined') {
+      delete (window as unknown as { __activeUtterance?: unknown }).__activeUtterance;
+    }
+  }, []);
 
   const speak = useCallback(
     (customText?: string, customVoiceURI?: string) => {
-      if (isMutedRef.current) return;
+      if (typeof window === 'undefined' || !('speechSynthesis' in window) || isMutedRef.current) {
+        return;
+      }
 
+      // Unlock mobile audio context
       unlockAudioEngine();
       setHasAudioUnlocked(true);
 
       const text = customText || textToSpeak;
       if (!text || text.trim().length === 0) return;
 
-      const targetURI = customVoiceURI || voiceURI || 'cloud-en-us';
+      // Determine target voice and language
+      const targetURI = customVoiceURI || voiceURI || 'default-system-voice';
 
-      // Check if target voice is a Cloud Voice
-      const cloudOption = CLOUD_VOICES.find((cv) => cv.voiceURI === targetURI);
-      if (cloudOption) {
-        playCloudAudio(text, cloudOption.lang);
-        return;
-      }
+      let voiceToUse: SpeechSynthesisVoice | null = null;
+      let targetLang = 'en-US';
 
-      // If target voice is not a Cloud Voice, try System SpeechSynthesis
-      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        // Fallback to Cloud Audio
-        playCloudAudio(text, 'en');
-        return;
-      }
-
-      let currentAvailable: SpeechSynthesisVoice[] = [];
-      try {
-        currentAvailable = window.speechSynthesis.getVoices() || [];
-      } catch {
-        currentAvailable = [];
-      }
-
-      // If system voices are empty (e.g. Android APK WebView), fallback to Cloud Audio!
-      if (!currentAvailable || currentAvailable.length === 0) {
-        playCloudAudio(text, 'en');
-        return;
-      }
-
-      let matchedVoice = currentAvailable.find(
-        (v) => (v.voiceURI && v.voiceURI === targetURI) || v.name === targetURI
-      );
-
-      if (!matchedVoice) {
-        matchedVoice =
-          currentAvailable.find((v) => v.lang.startsWith('en') && v.default) ||
-          currentAvailable.find((v) => v.lang.toLowerCase().startsWith('en')) ||
-          currentAvailable[0];
-      }
-
-      const doSystemSpeak = () => {
+      if (targetURI.startsWith('preset-')) {
+        targetLang = targetURI.replace('preset-', '');
+        if (targetLang === 'la') targetLang = 'la';
+        if (targetLang === 'es-es') targetLang = 'es-ES';
+      } else if (targetURI !== 'default-system-voice') {
+        let currentAvailable: SpeechSynthesisVoice[] = [];
         try {
-          stopCloudAudio();
-          stopSystemSpeech();
+          currentAvailable = window.speechSynthesis.getVoices() || [];
+        } catch {
+          currentAvailable = [];
+        }
 
+        if (currentAvailable.length > 0) {
+          voiceToUse =
+            currentAvailable.find(
+              (v) => (v.voiceURI && v.voiceURI === targetURI) || v.name === targetURI
+            ) || null;
+          if (voiceToUse) {
+            targetLang = voiceToUse.lang || 'en-US';
+          }
+        }
+      }
+
+      const executeSpeak = () => {
+        try {
           if (window.speechSynthesis.paused) {
             window.speechSynthesis.resume();
           }
 
           const utterance = new SpeechSynthesisUtterance(text);
-          utterance.rate = Math.max(0.7, Math.min(1.2, speechRateRef.current));
+          utterance.rate = Math.max(0.6, Math.min(1.3, speechRateRef.current));
           utterance.pitch = 1.0;
           utterance.volume = 1.0;
+          utterance.lang = targetLang;
 
-          if (matchedVoice) {
-            utterance.voice = matchedVoice;
-            utterance.lang = matchedVoice.lang || 'en-US';
-          } else {
-            utterance.lang = 'en-US';
+          if (voiceToUse) {
+            utterance.voice = voiceToUse;
           }
 
+          // Crucial Android WebView / WebKit GC Fix: Keep reference on global window object
           (window as unknown as { __activeUtterance?: SpeechSynthesisUtterance }).__activeUtterance = utterance;
 
           utterance.onstart = () => {
@@ -385,9 +274,10 @@ export function useSpeech({
           };
 
           utterance.onerror = (e) => {
-            console.warn('Speech synthesis error, falling back to Cloud Voice:', e);
+            console.warn('Speech synthesis error:', e);
+            setIsSpeaking(false);
+            setIsPaused(false);
             delete (window as unknown as { __activeUtterance?: unknown }).__activeUtterance;
-            playCloudAudio(text, 'en');
           };
 
           utteranceRef.current = utterance;
@@ -396,37 +286,29 @@ export function useSpeech({
           setIsSpeaking(true);
           setIsPaused(false);
         } catch (err) {
-          console.warn('System speak failed, falling back to Cloud Voice:', err);
-          playCloudAudio(text, 'en');
+          console.warn('Failed to execute speak:', err);
+          setIsSpeaking(false);
+          setIsPaused(false);
         }
       };
 
+      // In Android WebView, calling window.speechSynthesis.cancel() in the same frame as speak()
+      // will cancel the new utterance. Only cancel if currently speaking/pending!
       if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
         try {
           window.speechSynthesis.cancel();
         } catch {
           // ignore
         }
-        setTimeout(doSystemSpeak, 100);
+        setTimeout(executeSpeak, 60);
       } else {
-        doSystemSpeak();
+        executeSpeak();
       }
     },
-    [textToSpeak, voiceURI, playCloudAudio, stopCloudAudio, stopSystemSpeech]
+    [textToSpeak, voiceURI]
   );
 
   const pause = useCallback(() => {
-    if (isPlayingCloudRef.current && activeAudioRef.current) {
-      try {
-        activeAudioRef.current.pause();
-        setIsPaused(true);
-        setIsSpeaking(false);
-      } catch {
-        // ignore
-      }
-      return;
-    }
-
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
         window.speechSynthesis.pause();
@@ -439,21 +321,9 @@ export function useSpeech({
   }, []);
 
   const resume = useCallback(() => {
-    unlockAudioEngine();
-
-    if (isPlayingCloudRef.current && activeAudioRef.current) {
-      try {
-        activeAudioRef.current.play();
-        setIsPaused(false);
-        setIsSpeaking(true);
-      } catch {
-        speak();
-      }
-      return;
-    }
-
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
+        unlockAudioEngine();
         if (window.speechSynthesis.paused) {
           window.speechSynthesis.resume();
           setIsPaused(false);
@@ -464,8 +334,6 @@ export function useSpeech({
       } catch {
         speak();
       }
-    } else {
-      speak();
     }
   }, [speak]);
 
