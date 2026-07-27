@@ -30,12 +30,17 @@ export function unlockAudioEngine(): void {
     ctx.resume().catch(() => {});
   }
 
-  // 2. Resume Web Speech API if paused on mobile
+  // 2. Resume Web Speech API & wake Android TextToSpeech service in APK/WebView
   if ('speechSynthesis' in window) {
     try {
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
       }
+      // Force Android WebView to initialize TextToSpeech engine service connection
+      window.speechSynthesis.getVoices();
+      const warmUtterance = new SpeechSynthesisUtterance('');
+      warmUtterance.volume = 0;
+      window.speechSynthesis.speak(warmUtterance);
     } catch {
       // Ignore initial unlock errors
     }

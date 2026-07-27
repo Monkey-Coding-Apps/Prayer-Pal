@@ -98,7 +98,7 @@ export function useSpeech({
 
     const mapped: VoiceOption[] = availableVoices.map((v) => ({
       voiceURI: v.voiceURI || v.name,
-      name: v.name,
+      name: v.name || 'System Voice',
       lang: v.lang || 'en-US',
       isLocalService: v.localService,
       default: v.default,
@@ -115,12 +115,12 @@ export function useSpeech({
     }
 
     if (!matched) {
-      // Preferred English voices (natural or default)
+      // Preferred English voices (natural or default or google)
       matched =
         availableVoices.find((v) => v.lang.startsWith('en') && v.name.includes('Natural')) ||
         availableVoices.find((v) => v.lang.startsWith('en') && v.name.includes('Google')) ||
         availableVoices.find((v) => v.lang.startsWith('en') && v.default) ||
-        availableVoices.find((v) => v.lang.startsWith('en')) ||
+        availableVoices.find((v) => v.lang.toLowerCase().startsWith('en')) ||
         availableVoices[0];
     }
 
@@ -135,7 +135,7 @@ export function useSpeech({
       window.speechSynthesis.onvoiceschanged = loadVoices;
     }
 
-    // Poll every 400ms for up to 10 seconds to catch delayed Android TTS initialization
+    // Poll every 350ms for up to 12 seconds to catch delayed Android TextToSpeech initialization
     let attempts = 0;
     const interval = setInterval(() => {
       attempts += 1;
@@ -144,12 +144,23 @@ export function useSpeech({
         if (currentVoices && currentVoices.length > 0) {
           loadVoices();
           clearInterval(interval);
+        } else {
+          // On attempts 1, 4, 8: Wake Android WebView SpeechSynthesis IPC
+          if (attempts === 1 || attempts === 4 || attempts === 8) {
+            try {
+              const warm = new SpeechSynthesisUtterance('');
+              warm.volume = 0;
+              window.speechSynthesis.speak(warm);
+            } catch {
+              // ignore
+            }
+          }
         }
       }
-      if (attempts >= 25) {
+      if (attempts >= 35) {
         clearInterval(interval);
       }
-    }, 400);
+    }, 350);
 
     return () => {
       clearInterval(interval);
@@ -188,12 +199,16 @@ export function useSpeech({
       const text = customText || textToSpeak;
       if (!text || text.trim().length === 0) return;
 
-      // Attempt voice refresh if list is currently default
+      // Fresh voice retrieval to handle Android background TTS service initialization
       let currentAvailable: SpeechSynthesisVoice[] = [];
       try {
         currentAvailable = window.speechSynthesis.getVoices() || [];
       } catch {
         currentAvailable = [];
+      }
+
+      if (currentAvailable.length > 0 && voices.length <= 1) {
+        loadVoices();
       }
 
       // Determine voice to use
@@ -213,21 +228,20 @@ export function useSpeech({
             currentAvailable.find((v) => v.lang.startsWith('en') && v.name.includes('Natural')) ||
             currentAvailable.find((v) => v.lang.startsWith('en') && v.name.includes('Google')) ||
             currentAvailable.find((v) => v.lang.startsWith('en') && v.default) ||
-            currentAvailable.find((v) => v.lang.startsWith('en')) ||
+            currentAvailable.find((v) => v.lang.toLowerCase().startsWith('en')) ||
             currentAvailable[0] ||
             null;
         }
       }
 
-      // Prepare speech execution function
-      const executeSpeak = () => {
+      const doSpeak = () => {
         try {
           if (window.speechSynthesis.paused) {
             window.speechSynthesis.resume();
           }
 
           const utterance = new SpeechSynthesisUtterance(text);
-          utterance.rate = Math.max(0.5, Math.min(1.5, speechRateRef.current));
+          utterance.rate = Math.max(0.7, Math.min(1.2, speechRateRef.current));
           utterance.pitch = 1.0;
           utterance.volume = 1.0;
 
@@ -264,6 +278,10 @@ export function useSpeech({
 
           utteranceRef.current = utterance;
           window.speechSynthesis.speak(utterance);
+
+          // Optimistic activation feedback for Android WebView
+          setIsSpeaking(true);
+          setIsPaused(false);
         } catch (err) {
           console.warn('Failed to execute speak:', err);
           setIsSpeaking(false);
@@ -272,19 +290,19 @@ export function useSpeech({
       };
 
       // Safely cancel active or pending synthesis before speaking
-      // microtick delay ensures Android Chromium IPC cancel doesn't discard the new utterance!
+      // 120ms delay ensures Android Chromium IPC cancel finishes stopping native audio track
       if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
         try {
           window.speechSynthesis.cancel();
         } catch {
           // ignore
         }
-        setTimeout(executeSpeak, 40);
+        setTimeout(doSpeak, 120);
       } else {
-        executeSpeak();
+        doSpeak();
       }
     },
-    [textToSpeak, selectedVoice, voiceURI]
+    [textToSpeak, selectedVoice, voiceURI, voices.length, loadVoices]
   );
 
   const pause = useCallback(() => {
