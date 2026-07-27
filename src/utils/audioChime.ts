@@ -40,26 +40,13 @@ export function unlockAudioEngine(): void {
     ctx.resume().catch(() => {});
   }
 
-  // 2. Unlock HTML5 Audio Element for media playback
-  const audio = getGlobalAudioElement();
-  if (audio) {
-    audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-    audio.play().then(() => {
-      audio.pause();
-    }).catch(() => {});
-  }
-
-  // 3. Resume Web Speech API & wake Android TextToSpeech service in APK/WebView
+  // 2. Resume Web Speech API if paused
   if ('speechSynthesis' in window) {
     try {
       if (window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
       }
-      // Force Android WebView to initialize TextToSpeech engine service connection
       window.speechSynthesis.getVoices();
-      const warmUtterance = new SpeechSynthesisUtterance('');
-      warmUtterance.volume = 0;
-      window.speechSynthesis.speak(warmUtterance);
     } catch {
       // Ignore initial unlock errors
     }

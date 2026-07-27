@@ -159,6 +159,9 @@ export function useSpeech({
     const audio = getGlobalAudioElement();
     if (audio) {
       try {
+        audio.onplay = null;
+        audio.onended = null;
+        audio.onerror = null;
         audio.pause();
         audio.currentTime = 0;
         audio.removeAttribute('src');
@@ -232,8 +235,12 @@ export function useSpeech({
     const audio = getGlobalAudioElement();
     if (!audio) return;
 
-    audio.pause();
+    audio.onplay = null;
+    audio.onended = null;
+    audio.onerror = null;
+
     try {
+      audio.pause();
       audio.currentTime = 0;
     } catch {
       // ignore
@@ -241,9 +248,13 @@ export function useSpeech({
 
     const ttsUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
     audio.src = ttsUrl;
-    audio.playbackRate = Math.max(0.75, Math.min(1.25, speechRateRef.current));
 
     audio.onplay = () => {
+      try {
+        audio.playbackRate = Math.max(0.75, Math.min(1.25, speechRateRef.current));
+      } catch {
+        // ignore
+      }
       setIsSpeaking(true);
       setIsPaused(false);
     };
@@ -261,6 +272,9 @@ export function useSpeech({
       setIsSpeaking(false);
       setIsPaused(false);
     };
+
+    setIsSpeaking(true);
+    setIsPaused(false);
 
     const playPromise = audio.play();
     if (playPromise !== undefined) {
