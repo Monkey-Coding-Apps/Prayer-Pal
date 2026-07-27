@@ -273,15 +273,13 @@ export function useSpeech({
       setIsPaused(false);
     };
 
-    setIsSpeaking(true);
     setIsPaused(false);
 
     const playPromise = audio.play();
     if (playPromise !== undefined) {
       playPromise
         .then(() => {
-          setIsSpeaking(true);
-          setIsPaused(false);
+          // Playback started
         })
         .catch((err) => {
           console.warn('Cloud audio playback blocked/failed:', err);
@@ -302,7 +300,10 @@ export function useSpeech({
       const text = customText || textToSpeak;
       if (!text || text.trim().length === 0) return;
 
-      const targetURI = customVoiceURI || voiceURI || 'cloud-en-us';
+      let targetURI = customVoiceURI || voiceURI || 'cloud-en-us';
+      if (!targetURI || targetURI === 'null' || targetURI === 'undefined' || targetURI === 'default-system-voice') {
+        targetURI = 'cloud-en-us';
+      }
 
       // Halt any previous playback
       stop();
