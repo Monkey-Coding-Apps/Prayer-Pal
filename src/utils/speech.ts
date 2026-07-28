@@ -168,11 +168,84 @@ export function useSpeech({
 
   useEffect(() => {
     speechRateRef.current = speechRate;
+
+    // Real-time playback rate adjustment for active Web Audio source node or HTML audio element
+    const clampedRate = Math.max(0.5, Math.min(2.0, speechRate));
+    if (activeSourceNode) {
+      try {
+        const ctx = getAudioContext();
+        if (ctx) {
+          activeSourceNode.playbackRate.setValueAtTime(clampedRate, ctx.currentTime);
+        } else {
+          activeSourceNode.playbackRate.value = clampedRate;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
+    const audio = getGlobalAudioElement();
+    if (audio) {
+      try {
+        audio.playbackRate = clampedRate;
+      } catch {
+        // ignore
+      }
+    }
   }, [speechRate]);
 
   useEffect(() => {
     isMutedRef.current = isMuted;
   }, [isMuted]);
+
+  // Screen Wake Lock API to prevent screen from sleeping while prayer audio is playing
+  useEffect(() => {
+    let wakeLockSentinel: any = null;
+
+    const requestWakeLock = async () => {
+      if (typeof window !== 'undefined' && 'wakeLock' in navigator) {
+        try {
+          if (!wakeLockSentinel) {
+            wakeLockSentinel = await (navigator as any).wakeLock.request('screen');
+            wakeLockSentinel.addEventListener('release', () => {
+              wakeLockSentinel = null;
+            });
+          }
+        } catch {
+          // Ignore wake lock error (e.g. low battery, background tab)
+        }
+      }
+    };
+
+    const releaseWakeLock = async () => {
+      if (wakeLockSentinel) {
+        try {
+          await wakeLockSentinel.release();
+        } catch {
+          // ignore
+        }
+        wakeLockSentinel = null;
+      }
+    };
+
+    if (isSpeaking && !isPaused) {
+      requestWakeLock();
+    } else {
+      releaseWakeLock();
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isSpeaking && !isPaused) {
+        requestWakeLock();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      releaseWakeLock();
+    };
+  }, [isSpeaking, isPaused]);
 
   const clearWatchdog = useCallback(() => {
     if (watchdogTimerRef.current) {
@@ -326,7 +399,7 @@ export function useSpeech({
 
           const source = ctx.createBufferSource();
           source.buffer = audioBuffer;
-          source.playbackRate.value = Math.max(0.75, Math.min(1.25, speechRateRef.current));
+          source.playbackRate.value = Math.max(0.5, Math.min(2.0, speechRateRef.current));
           source.connect(ctx.destination);
 
           activeSourceNode = source;
@@ -354,6 +427,11 @@ export function useSpeech({
       if (audio) {
         audio.src = mp3Url;
         audio.onplay = () => {
+          try {
+            audio.playbackRate = Math.max(0.5, Math.min(2.0, speechRateRef.current));
+          } catch {
+            // ignore
+          }
           setIsSpeaking(true);
           setIsPaused(false);
         };
@@ -441,7 +519,7 @@ export function useSpeech({
 
           const source = ctx.createBufferSource();
           source.buffer = audioBuffer;
-          source.playbackRate.value = Math.max(0.75, Math.min(1.25, speechRateRef.current));
+          source.playbackRate.value = Math.max(0.5, Math.min(2.0, speechRateRef.current));
           source.connect(ctx.destination);
 
           activeSourceNode = source;
@@ -474,7 +552,7 @@ export function useSpeech({
 
         audio.onplay = () => {
           try {
-            audio.playbackRate = Math.max(0.75, Math.min(1.25, speechRateRef.current));
+            audio.playbackRate = Math.max(0.5, Math.min(2.0, speechRateRef.current));
           } catch {
             // ignore
           }
@@ -581,7 +659,7 @@ export function useSpeech({
           }
 
           const utterance = new SpeechSynthesisUtterance(text);
-          utterance.rate = Math.max(0.7, Math.min(1.2, speechRateRef.current));
+          utterance.rate = Math.max(0.5, Math.min(2.0, speechRateRef.current));
           utterance.voice = targetVoice;
           utterance.lang = targetVoice.lang || 'en-US';
 

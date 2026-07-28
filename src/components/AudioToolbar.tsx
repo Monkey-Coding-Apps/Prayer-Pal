@@ -278,27 +278,27 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
             </select>
           </div>
 
-          {/* Speech Rate Slider (0.7x to 1.1x) */}
+          {/* Speech Rate Slider (0.6x to 1.4x) */}
           <div className="space-y-1.5">
             <div className="flex items-center justify-between text-[#4a4a3f] dark:text-[#c5c5b5] font-medium">
               <span className="flex items-center gap-1.5">
                 <Gauge className="w-3.5 h-3.5 text-[#8c7b5b]" />
                 <span>Speech Pace (Reverence Speed)</span>
               </span>
-              <span className="font-bold text-[#8c7b5b]">{speechRate.toFixed(1)}x</span>
+              <span className="font-bold text-[#8c7b5b]">{speechRate.toFixed(2)}x</span>
             </div>
             <div className="flex items-center gap-3">
-              <span className="text-[10px] text-[#8c7b5b]">0.7x (Solemn)</span>
+              <span className="text-[10px] text-[#8c7b5b]">0.6x (Solemn)</span>
               <input
                 type="range"
-                min="0.7"
-                max="1.1"
+                min="0.6"
+                max="1.4"
                 step="0.05"
                 value={speechRate}
                 onChange={(e) => onChangeSpeechRate(parseFloat(e.target.value))}
                 className="w-full h-1.5 bg-[#d1d1c1] dark:bg-[#38382f] rounded-lg appearance-none cursor-pointer accent-[#5a5a40]"
               />
-              <span className="text-[10px] text-[#8c7b5b]">1.1x (Brisk)</span>
+              <span className="text-[10px] text-[#8c7b5b]">1.4x (Brisk)</span>
             </div>
           </div>
         </div>
