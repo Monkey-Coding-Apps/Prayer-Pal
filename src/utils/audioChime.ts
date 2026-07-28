@@ -10,6 +10,8 @@ export function getGlobalAudioElement(): HTMLAudioElement | null {
   if (!globalAudioElement) {
     globalAudioElement = new Audio();
     globalAudioElement.preload = 'auto';
+    globalAudioElement.setAttribute('playsinline', 'true');
+    globalAudioElement.setAttribute('webkit-playsinline', 'true');
   }
   return globalAudioElement;
 }
@@ -17,7 +19,9 @@ export function getGlobalAudioElement(): HTMLAudioElement | null {
 export function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   if (!audioCtx) {
-    const AudioContextClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    const AudioContextClass =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     if (AudioContextClass) {
       audioCtx = new AudioContextClass();
     }
@@ -35,17 +39,29 @@ export function getAudioContext(): AudioContext | null {
 export function unlockAudioEngine(): void {
   if (typeof window === 'undefined') return;
 
-  // 1. Resume Web Audio Context
+  // 1. Resume Web Audio Context & kickstart with a silent buffer
   const ctx = getAudioContext();
-  if (ctx && ctx.state === 'suspended') {
-    ctx.resume().catch(() => {});
+  if (ctx) {
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    try {
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(0);
+    } catch {
+      // ignore
+    }
   }
 
-  // 2. Unlock HTML5 Audio element once on first gesture
+  // 2. Unlock HTML5 Audio element once on user gesture
   if (!audioUnlocked) {
     const audio = getGlobalAudioElement();
     if (audio) {
-      audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+      audio.src =
+        'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
       const p = audio.play();
       if (p !== undefined) {
         p.then(() => {

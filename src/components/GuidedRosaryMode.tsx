@@ -74,10 +74,7 @@ export const GuidedRosaryMode: React.FC<GuidedRosaryModeProps> = ({
       if (config.voiceURI !== 'chime-bell') {
         playSacredChime(432, 0.8);
       }
-      const timer = setTimeout(() => {
-        speak(currentStep.text);
-      }, 200);
-      return () => clearTimeout(timer);
+      speak(currentStep.text);
     } else if (!isPlayingRosary) {
       stop();
     }

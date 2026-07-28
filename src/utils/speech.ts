@@ -508,6 +508,10 @@ export function useSpeech({
     clearWatchdog();
 
     if (activeModeRef.current === 'cloud') {
+      const ctx = getAudioContext();
+      if (ctx && ctx.state === 'running') {
+        ctx.suspend().catch(() => {});
+      }
       const audio = getGlobalAudioElement();
       if (audio) {
         try {
@@ -536,6 +540,16 @@ export function useSpeech({
     unlockAudioEngine();
 
     if (activeModeRef.current === 'cloud') {
+      const ctx = getAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().then(() => {
+          setIsPaused(false);
+          setIsSpeaking(true);
+        }).catch(() => {
+          speak();
+        });
+        return;
+      }
       const audio = getGlobalAudioElement();
       if (audio && audio.src) {
         audio.play().then(() => {
