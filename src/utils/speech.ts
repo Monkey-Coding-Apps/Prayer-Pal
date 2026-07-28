@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { getGlobalAudioElement, playSacredChime, unlockAudioEngine } from './audioChime';
+import { getAudioContext, getGlobalAudioElement, playSacredChime, unlockAudioEngine } from './audioChime';
 
 export interface VoiceOption {
   voiceURI: string;
@@ -106,6 +106,10 @@ const CLOUD_LANG_MAP: Record<string, string> = {
   'cloud-de': 'de',
 };
 
+// Global Web Audio active nodes tracking
+let activeSourceNode: AudioBufferSourceNode | null = null;
+let currentFetchController: AbortController | null = null;
+
 export function useSpeech({
   textToSpeak,
   speechRate,
@@ -155,7 +159,21 @@ export function useSpeech({
   const stop = useCallback(() => {
     clearWatchdog();
 
-    // 1. Stop HTML5 Audio
+    if (currentFetchController) {
+      currentFetchController.abort();
+      currentFetchController = null;
+    }
+
+    if (activeSourceNode) {
+      try {
+        activeSourceNode.stop();
+        activeSourceNode.disconnect();
+      } catch {
+        // ignore
+      }
+      activeSourceNode = null;
+    }
+
     const audio = getGlobalAudioElement();
     if (audio) {
       try {
@@ -164,13 +182,11 @@ export function useSpeech({
         audio.onerror = null;
         audio.pause();
         audio.currentTime = 0;
-        audio.removeAttribute('src');
       } catch {
         // ignore
       }
     }
 
-    // 2. Stop System SpeechSynthesis
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
         window.speechSynthesis.cancel();
@@ -228,64 +244,117 @@ export function useSpeech({
     }
   }, [loadVoices]);
 
-  // Direct Cloud Speech Player via server /api/tts endpoint
-  const playCloudSpeech = useCallback((text: string, lang: string) => {
+  // Direct Cloud Speech Player using Web Audio API (100% reliable in browser sandboxes)
+  const playCloudSpeech = useCallback(async (text: string, lang: string) => {
     activeModeRef.current = 'cloud';
 
-    const audio = getGlobalAudioElement();
-    if (!audio) return;
-
-    audio.onplay = null;
-    audio.onended = null;
-    audio.onerror = null;
-
-    try {
-      audio.pause();
-      audio.currentTime = 0;
-    } catch {
-      // ignore
+    // Abort previous fetch/playback
+    if (currentFetchController) {
+      currentFetchController.abort();
+      currentFetchController = null;
+    }
+    if (activeSourceNode) {
+      try {
+        activeSourceNode.stop();
+        activeSourceNode.disconnect();
+      } catch {
+        // ignore
+      }
+      activeSourceNode = null;
     }
 
-    const ttsUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
-    audio.src = ttsUrl;
+    setIsSpeaking(true);
+    setIsPaused(false);
 
-    audio.onplay = () => {
+    // Primary: Web Audio API decoding and buffer playback
+    const ctx = getAudioContext();
+    if (ctx) {
+      try {
+        if (ctx.state === 'suspended') {
+          await ctx.resume();
+        }
+
+        const controller = new AbortController();
+        currentFetchController = controller;
+
+        const ttsUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+        const res = await fetch(ttsUrl, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const arrayBuf = await res.arrayBuffer();
+        if (controller.signal.aborted) return;
+
+        // Decode audio buffer asynchronously
+        const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
+          ctx.decodeAudioData(
+            arrayBuf.slice(0),
+            (buf) => resolve(buf),
+            (err) => reject(err)
+          );
+        });
+
+        if (controller.signal.aborted) return;
+
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        source.playbackRate.value = Math.max(0.75, Math.min(1.25, speechRateRef.current));
+        source.connect(ctx.destination);
+
+        activeSourceNode = source;
+
+        source.onended = () => {
+          if (activeSourceNode === source) {
+            activeSourceNode = null;
+            setIsSpeaking(false);
+            setIsPaused(false);
+            if (autoAdvanceRef.current && onSpeechEndRef.current) {
+              onSpeechEndRef.current();
+            }
+          }
+        };
+
+        source.start(0);
+        setIsSpeaking(true);
+        setIsPaused(false);
+        return;
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+        console.warn('Web Audio TTS decode failed, falling back to Audio element:', err);
+      }
+    }
+
+    // Secondary Fallback: HTML5 Audio Element
+    const audio = getGlobalAudioElement();
+    if (audio) {
+      const ttsUrl = `/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+      audio.src = ttsUrl;
       try {
         audio.playbackRate = Math.max(0.75, Math.min(1.25, speechRateRef.current));
       } catch {
         // ignore
       }
-      setIsSpeaking(true);
-      setIsPaused(false);
-    };
 
-    audio.onended = () => {
-      setIsSpeaking(false);
-      setIsPaused(false);
-      if (autoAdvanceRef.current && onSpeechEndRef.current) {
-        onSpeechEndRef.current();
+      audio.onended = () => {
+        setIsSpeaking(false);
+        setIsPaused(false);
+        if (autoAdvanceRef.current && onSpeechEndRef.current) {
+          onSpeechEndRef.current();
+        }
+      };
+
+      audio.onerror = () => {
+        setIsSpeaking(false);
+        setIsPaused(false);
+      };
+
+      try {
+        await audio.play();
+        setIsSpeaking(true);
+        setIsPaused(false);
+      } catch {
+        setIsSpeaking(false);
+        setIsPaused(false);
       }
-    };
-
-    audio.onerror = (err) => {
-      console.warn('Cloud audio element playback error:', err);
-      setIsSpeaking(false);
-      setIsPaused(false);
-    };
-
-    setIsPaused(false);
-
-    const playPromise = audio.play();
-    if (playPromise !== undefined) {
-      playPromise
-        .then(() => {
-          // Playback started
-        })
-        .catch((err) => {
-          console.warn('Cloud audio playback blocked/failed:', err);
-          setIsSpeaking(false);
-          setIsPaused(false);
-        });
     }
   }, []);
 
@@ -408,6 +477,10 @@ export function useSpeech({
     clearWatchdog();
 
     if (activeModeRef.current === 'cloud') {
+      const ctx = getAudioContext();
+      if (ctx && ctx.state === 'running') {
+        ctx.suspend().catch(() => {});
+      }
       const audio = getGlobalAudioElement();
       if (audio) {
         try {
@@ -436,21 +509,14 @@ export function useSpeech({
     unlockAudioEngine();
 
     if (activeModeRef.current === 'cloud') {
-      const audio = getGlobalAudioElement();
-      if (audio && audio.src) {
-        try {
-          audio
-            .play()
-            .then(() => {
-              setIsPaused(false);
-              setIsSpeaking(true);
-            })
-            .catch(() => {
-              speak();
-            });
-        } catch {
+      const ctx = getAudioContext();
+      if (ctx && ctx.state === 'suspended') {
+        ctx.resume().then(() => {
+          setIsPaused(false);
+          setIsSpeaking(true);
+        }).catch(() => {
           speak();
-        }
+        });
         return;
       }
     }

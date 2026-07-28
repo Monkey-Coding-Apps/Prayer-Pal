@@ -40,21 +40,7 @@ export function unlockAudioEngine(): void {
     ctx.resume().catch(() => {});
   }
 
-  // 2. Unlock HTML5 Audio Element for media playback
-  const audio = getGlobalAudioElement();
-  if (audio && audio.paused) {
-    if (!audio.src || audio.src.startsWith('data:')) {
-      audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-      const p = audio.play();
-      if (p !== undefined) {
-        p.then(() => {
-          audio.pause();
-        }).catch(() => {});
-      }
-    }
-  }
-
-  // 3. Resume Web Speech API if paused
+  // 2. Resume Web Speech API if paused
   if ('speechSynthesis' in window) {
     try {
       if (window.speechSynthesis.paused) {
