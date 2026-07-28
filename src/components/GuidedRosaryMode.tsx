@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { RosaryConfig, RosaryStep } from '../types';
 import { generateRosarySequence } from '../utils/rosarySequence';
@@ -43,6 +43,23 @@ export const GuidedRosaryMode: React.FC<GuidedRosaryModeProps> = ({
 
   const currentStep: RosaryStep | undefined = sequence[currentStepIndex];
 
+  const currentStepIndexRef = useRef(currentStepIndex);
+  useEffect(() => {
+    currentStepIndexRef.current = currentStepIndex;
+  }, [currentStepIndex]);
+
+  const sequenceRef = useRef(sequence);
+  useEffect(() => {
+    sequenceRef.current = sequence;
+  }, [sequence]);
+
+  const handleSpeechEnd = useCallback(() => {
+    if (currentStepIndexRef.current < sequenceRef.current.length - 1) {
+      setIsPlayingRosary(true);
+      setCurrentStepIndex((prev) => prev + 1);
+    }
+  }, []);
+
   // Speech API hook
   const {
     voices,
@@ -60,12 +77,7 @@ export const GuidedRosaryMode: React.FC<GuidedRosaryModeProps> = ({
     voiceURI: config.voiceURI,
     isMuted: config.isAudioMuted,
     autoAdvance: config.autoAdvance,
-    onSpeechEnd: () => {
-      // If autoAdvance is enabled and not at end
-      if (currentStepIndex < sequence.length - 1) {
-        setCurrentStepIndex((prev) => prev + 1);
-      }
-    },
+    onSpeechEnd: handleSpeechEnd,
   });
 
   // Automatically trigger speech when step changes if playing rosary & unmuted
@@ -385,6 +397,7 @@ export const GuidedRosaryMode: React.FC<GuidedRosaryModeProps> = ({
         isSpeaking={isSpeaking}
         isPaused={isPaused}
         onPlay={() => {
+          setIsPlayingRosary(true);
           if (isPaused) resume();
           else if (currentStep) speak(currentStep.text);
         }}

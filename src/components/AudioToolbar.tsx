@@ -58,11 +58,6 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
   const handleVoiceChange = (newVoiceURI: string) => {
     unlockAudioEngine();
     onSelectVoice(newVoiceURI);
-    if (onTestVoice) {
-      setTimeout(() => {
-        onTestVoice(newVoiceURI);
-      }, 150);
-    }
   };
 
   const handlePlayChime = () => {
@@ -132,19 +127,6 @@ export const AudioToolbar: React.FC<AudioToolbarProps> = ({
                 <span>{isPaused ? 'Resume Speech' : 'Recite Prayer'}</span>
               </>
             )}
-          </button>
-
-          {/* Reset / Stop Button */}
-          <button
-            type="button"
-            onClick={() => {
-              unlockAudioEngine();
-              onReset();
-            }}
-            className="p-2.5 rounded-xl bg-white dark:bg-[#2a2a22] border border-[#d1d1c1] dark:border-[#38382f] text-[#4a4a3f] dark:text-[#c5c5b5] hover:bg-[#f5f5f0] transition-all"
-            title="Reset Audio Speech"
-          >
-            <RotateCcw className="w-4 h-4" />
           </button>
 
           {/* Sacred Chime Button */}

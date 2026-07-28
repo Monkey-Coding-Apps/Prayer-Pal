@@ -118,6 +118,7 @@ const CLOUD_LANG_MAP: Record<string, string> = {
 // Global active Web Audio nodes & fetch controller for instant cancellation
 let activeSourceNode: AudioBufferSourceNode | null = null;
 let currentFetchController: AbortController | null = null;
+const audioBufferCache = new Map<string, AudioBuffer>();
 
 function decodeAudioDataPromise(ctx: AudioContext, data: ArrayBuffer): Promise<AudioBuffer> {
   return new Promise((resolve, reject) => {
@@ -381,22 +382,31 @@ export function useSpeech({
     currentFetchController = controller;
 
     try {
-      const res = await fetch(mp3Url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const arrayBuf = await res.arrayBuffer();
-      if (controller.signal.aborted) return true;
-
       const ctx = getAudioContext();
-      if (ctx) {
+
+      // Check if AudioBuffer is already cached
+      let audioBuffer = audioBufferCache.get(mp3Url);
+
+      if (!audioBuffer) {
+        const res = await fetch(mp3Url, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+        const arrayBuf = await res.arrayBuffer();
+        if (controller.signal.aborted) return true;
+
+        if (ctx) {
+          audioBuffer = await decodeAudioDataPromise(ctx, arrayBuf.slice(0));
+          if (controller.signal.aborted) return true;
+          audioBufferCache.set(mp3Url, audioBuffer);
+        }
+      }
+
+      if (ctx && audioBuffer) {
         if (ctx.state === 'suspended') {
           await ctx.resume().catch(() => {});
         }
 
         try {
-          const audioBuffer = await decodeAudioDataPromise(ctx, arrayBuf.slice(0));
-          if (controller.signal.aborted) return true;
-
           const source = ctx.createBufferSource();
           source.buffer = audioBuffer;
           source.playbackRate.value = Math.max(0.5, Math.min(2.0, speechRateRef.current));
