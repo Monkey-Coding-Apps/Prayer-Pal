@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { getAudioContext, getGlobalAudioElement, playSacredChime, unlockAudioEngine } from './audioChime';
+import { getStoredAudioUrl } from './audioStorage';
 
 export interface VoiceOption {
   voiceURI: string;
@@ -19,14 +20,22 @@ export interface UseSpeechProps {
   onSpeechEnd?: () => void;
 }
 
-// Universal Cloud & Tone Voices (Supported everywhere: Web, Mobile, APK, Android WebView)
+// Universal Cloud, Stored & Tone Voices (Supported everywhere: Web, Mobile, APK, Android WebView)
 export const UNIVERSAL_VOICES: VoiceOption[] = [
   {
+    voiceURI: 'stored-mp3',
+    name: 'Pre-Recorded Bundled Voice (100% Offline & Mobile Ready)',
+    lang: 'en',
+    isLocalService: true,
+    default: true,
+    provider: 'cloud',
+  },
+  {
     voiceURI: 'cloud-en-us',
-    name: 'English (US - Clear & Gentle)',
+    name: 'English (US - Clear & Gentle Cloud Voice)',
     lang: 'en',
     isLocalService: false,
-    default: true,
+    default: false,
     provider: 'cloud',
   },
   {
@@ -261,6 +270,115 @@ export function useSpeech({
     }
   }, [loadVoices]);
 
+  // Play bundled static MP3 audio (100% offline & mobile/Android Studio compatible)
+  const playStoredAudio = useCallback(async (textOrId: string): Promise<boolean> => {
+    activeModeRef.current = 'cloud';
+    const mp3Url = getStoredAudioUrl(textOrId);
+
+    if (!mp3Url) return false;
+
+    if (currentFetchController) {
+      currentFetchController.abort();
+      currentFetchController = null;
+    }
+
+    if (activeSourceNode) {
+      try {
+        activeSourceNode.stop();
+        activeSourceNode.disconnect();
+      } catch {
+        // ignore
+      }
+      activeSourceNode = null;
+    }
+
+    const audio = getGlobalAudioElement();
+    if (audio) {
+      try {
+        audio.pause();
+      } catch {
+        // ignore
+      }
+    }
+
+    setIsSpeaking(true);
+    setIsPaused(false);
+
+    const controller = new AbortController();
+    currentFetchController = controller;
+
+    try {
+      const res = await fetch(mp3Url, { signal: controller.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const arrayBuf = await res.arrayBuffer();
+      if (controller.signal.aborted) return true;
+
+      const ctx = getAudioContext();
+      if (ctx) {
+        if (ctx.state === 'suspended') {
+          await ctx.resume().catch(() => {});
+        }
+
+        try {
+          const audioBuffer = await decodeAudioDataPromise(ctx, arrayBuf.slice(0));
+          if (controller.signal.aborted) return true;
+
+          const source = ctx.createBufferSource();
+          source.buffer = audioBuffer;
+          source.playbackRate.value = Math.max(0.75, Math.min(1.25, speechRateRef.current));
+          source.connect(ctx.destination);
+
+          activeSourceNode = source;
+
+          source.onended = () => {
+            if (activeSourceNode === source) {
+              activeSourceNode = null;
+              setIsSpeaking(false);
+              setIsPaused(false);
+              if (autoAdvanceRef.current && onSpeechEndRef.current) {
+                onSpeechEndRef.current();
+              }
+            }
+          };
+
+          source.start(0);
+          setIsSpeaking(true);
+          setIsPaused(false);
+          return true;
+        } catch (decodeErr) {
+          console.warn('Web Audio decode failed for stored audio:', decodeErr);
+        }
+      }
+
+      if (audio) {
+        audio.src = mp3Url;
+        audio.onplay = () => {
+          setIsSpeaking(true);
+          setIsPaused(false);
+        };
+        audio.onended = () => {
+          setIsSpeaking(false);
+          setIsPaused(false);
+          if (autoAdvanceRef.current && onSpeechEndRef.current) {
+            onSpeechEndRef.current();
+          }
+        };
+        audio.onerror = () => {
+          setIsSpeaking(false);
+          setIsPaused(false);
+        };
+        await audio.play();
+        return true;
+      }
+      return false;
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return true;
+      console.warn('Stored audio playback error:', err);
+      return false;
+    }
+  }, []);
+
   // Cloud Speech player with Web Audio API (100% Android & Mobile compatible)
   const playCloudSpeech = useCallback(async (text: string, lang: string) => {
     activeModeRef.current = 'cloud';
@@ -383,15 +501,18 @@ export function useSpeech({
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
-      console.warn('Cloud speech playback failed:', err);
-      setIsSpeaking(false);
-      setIsPaused(false);
+      console.warn('Cloud speech fetch failed, trying stored audio fallback:', err);
+      const played = await playStoredAudio(text);
+      if (!played) {
+        setIsSpeaking(false);
+        setIsPaused(false);
+      }
     }
-  }, []);
+  }, [playStoredAudio]);
 
   // Main Speak Handler
   const speak = useCallback(
-    (customText?: string, customVoiceURI?: string) => {
+    async (customText?: string, customVoiceURI?: string) => {
       if (isMutedRef.current) return;
 
       unlockAudioEngine();
@@ -400,15 +521,24 @@ export function useSpeech({
       const text = customText || textToSpeak;
       if (!text || text.trim().length === 0) return;
 
-      let targetURI = customVoiceURI || voiceURI || 'cloud-en-us';
+      let targetURI = customVoiceURI || voiceURI || 'stored-mp3';
       if (!targetURI || targetURI === 'null' || targetURI === 'undefined' || targetURI === 'default-system-voice') {
-        targetURI = 'cloud-en-us';
+        targetURI = 'stored-mp3';
       }
 
       // Halt any previous playback
       stop();
 
-      // 1. Sacred Chime & Bell Only Mode
+      // 1. Stored MP3 Voice (Highest Android & Offline APK Compatibility)
+      if (targetURI === 'stored-mp3') {
+        const handled = await playStoredAudio(text);
+        if (handled) return;
+        // Fallback to cloud speech if no stored file matched
+        playCloudSpeech(text, 'en');
+        return;
+      }
+
+      // 2. Sacred Chime & Bell Only Mode
       if (targetURI === 'chime-bell') {
         activeModeRef.current = 'synth';
         setIsSpeaking(true);
@@ -424,7 +554,7 @@ export function useSpeech({
         return;
       }
 
-      // 2. Universal Cloud Voices
+      // 3. Universal Cloud Voices
       if (targetURI.startsWith('cloud-') || targetURI === 'default-system-voice') {
         const lang = CLOUD_LANG_MAP[targetURI] || 'en';
         playCloudSpeech(text, lang);

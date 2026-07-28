@@ -57,7 +57,7 @@ export default function App() {
     mysteryType: getRecommendedMysteryForToday(),
     autoAdvance: true,
     speechRate: 0.85,
-    voiceURI: 'cloud-en-us',
+    voiceURI: 'stored-mp3',
     isAudioMuted: false,
     fontSize: 'base',
   }));
