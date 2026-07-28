@@ -3,6 +3,7 @@
 
 let audioCtx: AudioContext | null = null;
 let globalAudioElement: HTMLAudioElement | null = null;
+let audioUnlocked = false;
 
 export function getGlobalAudioElement(): HTMLAudioElement | null {
   if (typeof window === 'undefined') return null;
@@ -40,7 +41,22 @@ export function unlockAudioEngine(): void {
     ctx.resume().catch(() => {});
   }
 
-  // 2. Resume Web Speech API if paused
+  // 2. Unlock HTML5 Audio element once on first gesture
+  if (!audioUnlocked) {
+    const audio = getGlobalAudioElement();
+    if (audio) {
+      audio.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+      const p = audio.play();
+      if (p !== undefined) {
+        p.then(() => {
+          audioUnlocked = true;
+          audio.pause();
+        }).catch(() => {});
+      }
+    }
+  }
+
+  // 3. Resume Web Speech API if paused
   if ('speechSynthesis' in window) {
     try {
       if (window.speechSynthesis.paused) {
