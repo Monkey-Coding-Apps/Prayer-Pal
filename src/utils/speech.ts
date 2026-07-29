@@ -2,6 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { getAudioContext, getGlobalAudioElement, playSacredChime, unlockAudioEngine } from './audioChime';
 import { getStoredAudioUrl } from './audioStorage';
 
+// Use Capacitor for native HTTP to bypass CORS on Android
+let Capacitor: any = null;
+if (typeof window !== 'undefined') {
+  try {
+    // Attempt to get Capacitor from window (global) or potentially use a dynamic import if needed
+    Capacitor = (window as any).Capacitor;
+  } catch {
+    // ignore
+  }
+}
+
 export interface VoiceOption {
   voiceURI: string;
   name: string;
@@ -308,11 +319,14 @@ export function useSpeech({
 
   // Load device system voices and merge with Universal Cloud Voices
   const loadVoices = useCallback(() => {
+    console.log('loadVoices called');
     let availableVoices: SpeechSynthesisVoice[] = [];
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       try {
         availableVoices = window.speechSynthesis.getVoices() || [];
-      } catch {
+        console.log(`System voices found: ${availableVoices.length}`);
+      } catch (err) {
+        console.error('Error getting system voices:', err);
         availableVoices = [];
       }
     }
@@ -327,6 +341,7 @@ export function useSpeech({
     }));
 
     const combined = [...UNIVERSAL_VOICES, ...systemMapped];
+    console.log(`Total voices in state: ${combined.length}`);
     setVoices(combined);
 
     if (voiceURI) {
@@ -340,7 +355,26 @@ export function useSpeech({
   useEffect(() => {
     loadVoices();
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      console.log('Setting onvoiceschanged listener and polling for Android');
       window.speechSynthesis.onvoiceschanged = loadVoices;
+
+      // Polling fallback: Android WebViews often don't fire onvoiceschanged reliably
+      const interval = setInterval(() => {
+        const v = window.speechSynthesis.getVoices();
+        if (v && v.length > 0) {
+          console.log('Polling found voices, updating...');
+          loadVoices();
+          clearInterval(interval);
+        }
+      }, 1000);
+
+      // Stop polling after 10 seconds to save battery
+      const timeout = setTimeout(() => clearInterval(interval), 10000);
+
+      return () => {
+        clearInterval(interval);
+        clearTimeout(timeout);
+      };
     }
   }, [loadVoices]);
 
@@ -395,6 +429,7 @@ export function useSpeech({
         if (controller.signal.aborted) return true;
 
         if (ctx) {
+          // Decode audio data. Use a slice to ensure we have a fresh buffer for decodeAudioData
           audioBuffer = await decodeAudioDataPromise(ctx, arrayBuf.slice(0));
           if (controller.signal.aborted) return true;
           audioBufferCache.set(mp3Url, audioBuffer);
@@ -402,7 +437,7 @@ export function useSpeech({
       }
 
       if (ctx && audioBuffer) {
-        if (ctx.state === 'suspended') {
+        if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
           await ctx.resume().catch(() => {});
         }
 
@@ -430,12 +465,13 @@ export function useSpeech({
           setIsPaused(false);
           return true;
         } catch (decodeErr) {
-          console.warn('Web Audio decode failed for stored audio:', decodeErr);
+          console.warn('Web Audio playback failed for stored audio:', decodeErr);
         }
       }
 
       if (audio) {
         audio.src = mp3Url;
+        audio.load(); // Force load
         audio.onplay = () => {
           try {
             audio.playbackRate = Math.max(0.5, Math.min(2.0, speechRateRef.current));
@@ -452,17 +488,19 @@ export function useSpeech({
             onSpeechEndRef.current();
           }
         };
-        audio.onerror = () => {
+        audio.onerror = (e) => {
+          console.error("Stored HTML5 Audio Error:", e);
           setIsSpeaking(false);
           setIsPaused(false);
         };
-        await audio.play();
+        const p = audio.play();
+        if (p !== undefined) await p;
         return true;
       }
       return false;
     } catch (err: any) {
       if (err?.name === 'AbortError') return true;
-      console.warn('Stored audio playback error:', err);
+      console.warn('Stored audio playback error:', err.message || err);
       return false;
     }
   }, []);
@@ -504,26 +542,71 @@ export function useSpeech({
     const controller = new AbortController();
     currentFetchController = controller;
 
+    // Detect if running on native Capacitor (where localhost:3000 server is unreachable)
+    const isNative = Capacitor?.isNativePlatform?.();
+
+    // In Capacitor, origin is https://localhost. The Node server is NOT running there.
+    // Use direct Google Translate TTS as a fallback or a remote proxy.
     const origin = typeof window !== 'undefined' && window.location?.origin && window.location.origin !== 'null'
       ? window.location.origin
       : '';
-    const ttsUrl = `${origin}/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
+
+    // If native, use direct URL. Google Translate TTS works well with client=tw-ob
+    const ttsUrl = isNative
+      ? `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(text.slice(0, 200))}&tl=${encodeURIComponent(lang)}&client=tw-ob`
+      : `${origin}/api/tts?text=${encodeURIComponent(text)}&lang=${encodeURIComponent(lang)}`;
 
     try {
-      const res = await fetch(ttsUrl, { signal: controller.signal });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      console.log(`Attempting TTS [Native: ${isNative}]: ${ttsUrl}`);
 
-      const arrayBuf = await res.arrayBuffer();
+      let arrayBuf: ArrayBuffer;
+
+      // Use Capacitor HTTP for native to bypass CORS/User-Agent issues
+      if (isNative && Capacitor.Plugins?.CapacitorHttp) {
+        console.log('Using CapacitorHttp for TTS fetch');
+        const response = await Capacitor.Plugins.CapacitorHttp.get({
+          url: ttsUrl,
+          responseType: 'arraybuffer',
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://translate.google.com/'
+          }
+        });
+
+        if (response.status !== 200) throw new Error(`CapacitorHttp status ${response.status}`);
+
+        // Capacitor returns base64 or arraybuffer depending on config.
+        if (typeof response.data === 'string') {
+          const binaryString = window.atob(response.data);
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+          arrayBuf = bytes.buffer;
+        } else {
+          arrayBuf = response.data;
+        }
+      } else {
+        const res = await fetch(ttsUrl, {
+          signal: controller.signal,
+          headers: isNative ? {} : { 'Accept': 'audio/mpeg' }
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        arrayBuf = await res.arrayBuffer();
+      }
+
       if (controller.signal.aborted) return;
+      if (!arrayBuf || arrayBuf.byteLength === 0) throw new Error("Empty audio buffer received");
 
       // 1. Web Audio API playback (bypasses Android gesture locks after AudioContext unlock)
       const ctx = getAudioContext();
       if (ctx) {
-        if (ctx.state === 'suspended') {
+        if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
           await ctx.resume().catch(() => {});
         }
 
         try {
+          // Decode audio data. Use a slice to ensure we have a fresh buffer
           const audioBuffer = await decodeAudioDataPromise(ctx, arrayBuf.slice(0));
           if (controller.signal.aborted) return;
 
@@ -550,15 +633,16 @@ export function useSpeech({
           setIsPaused(false);
           return;
         } catch (decodeErr) {
-          console.warn('Web Audio decode failed, falling back to Blob audio:', decodeErr);
+          console.warn('Web Audio decode failed, falling back to HTML5 Audio:', decodeErr);
         }
       }
 
-      // 2. Blob URL Fallback on HTML5 Audio Element
+      // 2. Blob URL Fallback on HTML5 Audio Element (More robust for some Android WebViews)
       if (audio) {
         const blob = new Blob([arrayBuf], { type: 'audio/mpeg' });
         const blobUrl = URL.createObjectURL(blob);
         audio.src = blobUrl;
+        audio.load(); // Force load on Android
 
         audio.onplay = () => {
           try {
@@ -579,17 +663,23 @@ export function useSpeech({
           }
         };
 
-        audio.onerror = () => {
+        audio.onerror = (e) => {
+          console.error("HTML5 Audio Error:", e);
           URL.revokeObjectURL(blobUrl);
           setIsSpeaking(false);
           setIsPaused(false);
         };
 
-        await audio.play();
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          await playPromise;
+        }
       }
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
-      console.warn('Cloud speech fetch failed, trying stored audio fallback:', err);
+      console.warn('Cloud speech failed:', err.message || err);
+
+      // Final fallback: try stored audio if available, or just end
       const played = await playStoredAudio(text);
       if (!played) {
         setIsSpeaking(false);

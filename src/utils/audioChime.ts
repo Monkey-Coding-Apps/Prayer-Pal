@@ -42,7 +42,7 @@ export function unlockAudioEngine(): void {
   // 1. Resume Web Audio Context & kickstart with a silent buffer
   const ctx = getAudioContext();
   if (ctx) {
-    if (ctx.state === 'suspended') {
+    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
       ctx.resume().catch(() => {});
     }
     try {
@@ -51,6 +51,7 @@ export function unlockAudioEngine(): void {
       source.buffer = buffer;
       source.connect(ctx.destination);
       source.start(0);
+      source.stop(0.001);
     } catch {
       // ignore
     }
@@ -60,6 +61,7 @@ export function unlockAudioEngine(): void {
   if (!audioUnlocked) {
     const audio = getGlobalAudioElement();
     if (audio) {
+      audio.muted = true;
       audio.src =
         'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
       const p = audio.play();
@@ -67,7 +69,10 @@ export function unlockAudioEngine(): void {
         p.then(() => {
           audioUnlocked = true;
           audio.pause();
-        }).catch(() => {});
+          audio.muted = false;
+        }).catch(() => {
+          // Retry on next gesture if failed
+        });
       }
     }
   }
@@ -94,8 +99,8 @@ export function playSacredChime(freq = 432, duration = 2.5): void {
     const ctx = getAudioContext();
     if (!ctx) return;
 
-    if (ctx.state === 'suspended') {
-      ctx.resume();
+    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+      ctx.resume().catch(() => {});
     }
 
     const now = ctx.currentTime;
